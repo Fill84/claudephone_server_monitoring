@@ -4,9 +4,13 @@ import logging
 import socket
 import subprocess
 import sys
+import time
 from typing import Any, Dict, List
 
 import requests
+import urllib3
+
+urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 logger = logging.getLogger(__name__)
 
@@ -16,6 +20,9 @@ class MonitoringHandler:
 
     def __init__(self, servers: List[Dict[str, Any]]):
         self.servers = servers
+        self._previous_state: Dict[str, bool] = {}
+        self._last_results: List[Dict[str, Any]] = []
+        self._last_check_time: float = 0.0
 
     def update_servers(self, servers: List[Dict[str, Any]]) -> None:
         """Update the server list at runtime."""
@@ -43,6 +50,43 @@ class MonitoringHandler:
             results.append(self._check_server(server))
         return results
 
+    def get_alerts(self) -> List[str]:
+        """Run checks and return alert strings for online-to-offline transitions.
+
+        Only returns alerts for servers that changed from online to offline.
+        The first check cycle establishes baseline state (no alerts).
+        """
+        results = self.check_all()
+        self._last_results = results
+        self._last_check_time = time.time()
+
+        alerts = []
+        for r in results:
+            name = r["name"]
+            is_online = r["online"]
+            was_online = self._previous_state.get(name)
+
+            if not is_online and was_online is True:
+                alerts.append(
+                    f"ALERT: {name} is offline. "
+                    f"Check type: {r['type']}, host: {r['host']}."
+                )
+
+            self._previous_state[name] = is_online
+
+        return alerts
+
+    def get_full_status(self) -> Dict[str, Any]:
+        """Return full status for the dashboard (cached from last check cycle)."""
+        if not self._last_results:
+            self._last_results = self.check_all()
+            self._last_check_time = time.time()
+
+        return {
+            "servers": self._last_results,
+            "last_check": self._last_check_time,
+        }
+
     def _check_server(self, server: Dict[str, Any]) -> Dict[str, Any]:
         """Check a single server's health."""
         name = server.get("name", "Unknown")
@@ -51,9 +95,17 @@ class MonitoringHandler:
         port = server.get("port")
         url = server.get("url", "")
 
-        result = {"name": name, "host": host, "type": check_type, "online": False}
+        result = {
+            "name": name,
+            "host": host,
+            "type": check_type,
+            "online": False,
+            "response_time_ms": None,
+            "checked_at": time.time(),
+        }
 
         try:
+            start = time.monotonic()
             if check_type in ("http", "https"):
                 target_url = url or f"{check_type}://{host}"
                 if port and not url:
@@ -64,6 +116,7 @@ class MonitoringHandler:
                 result["online"] = self._check_ssh(host, ssh_port)
             else:
                 result["online"] = self._check_ping(host)
+            result["response_time_ms"] = round((time.monotonic() - start) * 1000, 1)
         except Exception as e:
             logger.warning("Health check failed for %s: %s", name, e)
             result["error"] = str(e)
@@ -75,11 +128,11 @@ class MonitoringHandler:
         if not host:
             return False
         try:
-            param = "-n" if sys.platform == "win32" else "-c"
-            cmd = ["ping", param, "1", "-W", "2", host]
-            result = subprocess.run(
-                cmd, capture_output=True, timeout=5,
-            )
+            if sys.platform == "win32":
+                cmd = ["ping", "-n", "1", "-w", "2000", host]
+            else:
+                cmd = ["ping", "-c", "1", "-W", "2", host]
+            result = subprocess.run(cmd, capture_output=True, timeout=5)
             return result.returncode == 0
         except (subprocess.TimeoutExpired, Exception):
             return False
@@ -88,16 +141,21 @@ class MonitoringHandler:
         """Check if an SSH port is open and responding."""
         if not host:
             return False
+        sock = None
         try:
             sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
             sock.settimeout(5)
             sock.connect((host, port))
-            # Read the SSH banner to confirm it's actually SSH
             banner = sock.recv(256)
-            sock.close()
             return banner.startswith(b"SSH-")
         except Exception:
             return False
+        finally:
+            if sock:
+                try:
+                    sock.close()
+                except Exception:
+                    pass
 
     def _check_http(self, url: str) -> bool:
         """Check if an HTTP endpoint is reachable."""

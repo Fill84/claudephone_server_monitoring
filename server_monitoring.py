@@ -3,6 +3,7 @@
 import json
 import logging
 import re
+import time
 from typing import Any, Dict, List
 
 from ..base import ConfigField, DashboardPage, DashboardWidget, PluginBase, PluginMeta
@@ -132,10 +133,14 @@ class ServerMonitoringPlugin(PluginBase):
             )
         return self._handler.handle(text, language)
 
-    def check_all(self) -> list:
-        """Expose check_all for the monitoring loop in agent.py."""
+    def check_all(self) -> List[str]:
+        """Return alert strings for the monitoring loop in agent.py.
+
+        Only returns alerts for servers that transitioned from online to offline.
+        Returns an empty list when all servers are stable.
+        """
         if self._handler:
-            return self._handler.check_all()
+            return self._handler.get_alerts()
         return []
 
     # --- API Actions (via generic plugin action route) ---
@@ -143,6 +148,9 @@ class ServerMonitoringPlugin(PluginBase):
     def handle_api_action(self, action: str, data: dict) -> dict:
         if action == "servers/list":
             return {"servers": self._load_servers()}
+
+        if action == "servers/status":
+            return self._action_full_status()
 
         if action == "servers/add":
             return self._action_add_server(data)
@@ -201,6 +209,18 @@ class ServerMonitoringPlugin(PluginBase):
         handler = MonitoringHandler(servers)
         return handler._check_server(servers[index])
 
+    def _action_full_status(self) -> dict:
+        """Return full status from the last monitoring cycle."""
+        if self._handler:
+            return self._handler.get_full_status()
+        from .handler import MonitoringHandler
+        servers = self._load_servers()
+        if not servers:
+            return {"servers": [], "last_check": 0}
+        handler = MonitoringHandler(servers)
+        results = handler.check_all()
+        return {"servers": results, "last_check": time.time()}
+
     # --- Dashboard rendering ---
 
     def render_widget(self, widget_id: str) -> str:
@@ -248,17 +268,14 @@ class ServerMonitoringPlugin(PluginBase):
             const A = '/api/plugins/server_monitoring/action';
             async function refresh() {
                 try {
-                    const r = await fetch(A + '/servers/list');
+                    const r = await fetch(A + '/servers/status');
                     const d = await r.json();
-                    const servers = d.servers || [];
-                    if (!servers.length) {
+                    const results = d.servers || [];
+                    if (!results.length) {
                         document.getElementById('mon-widget-text').innerHTML =
                             '<span style="color:#64748b">No servers configured</span>';
                         return;
                     }
-                    const results = await Promise.all(servers.map((s, i) =>
-                        fetch(A + '/servers/' + i + '/test', {method:'POST'}).then(r => r.json())
-                    ));
                     const on = results.filter(r => r.online).length;
                     const off = results.length - on;
                     let html = '';
@@ -449,8 +466,9 @@ class ServerMonitoringPlugin(PluginBase):
             try {{
                 const r = await fetch(MON_ACT + '/servers/' + index + '/test', {{method: 'POST'}});
                 const d = await r.json();
+                const rt = d.response_time_ms != null ? ' (' + d.response_time_ms + 'ms)' : '';
                 if (d.online) {{
-                    el.innerHTML = '&#9679; Online';
+                    el.innerHTML = '&#9679; Online' + rt;
                     el.style.color = '#22c55e';
                 }} else {{
                     el.innerHTML = '&#9679; Offline';
@@ -501,18 +519,14 @@ class ServerMonitoringPlugin(PluginBase):
         async function monStatusRefresh() {
             const el = document.getElementById('mon-status-list');
             try {
-                const r = await fetch(MON_ACT_S + '/servers/list');
+                const r = await fetch(MON_ACT_S + '/servers/status');
                 const d = await r.json();
-                const servers = d.servers || [];
-                if (!servers.length) {
+                const results = d.servers || [];
+                const lastCheck = d.last_check;
+                if (!results.length) {
                     el.innerHTML = '<p style="color:#64748b">No servers configured. Go to Settings to add servers.</p>';
                     return;
                 }
-                el.innerHTML = '<p style="color:#94a3b8">Checking ' + servers.length + ' server(s)...</p>';
-
-                const results = await Promise.all(servers.map((s, i) =>
-                    fetch(MON_ACT_S + '/servers/' + i + '/test', {method: 'POST'}).then(r => r.json())
-                ));
 
                 let html = '<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:12px">';
                 results.forEach((r, i) => {
@@ -520,13 +534,20 @@ class ServerMonitoringPlugin(PluginBase):
                     const status = r.online ? 'Online' : 'Offline';
                     const bg = r.online ? 'rgba(34,197,94,0.1)' : 'rgba(239,68,68,0.1)';
                     const typeLabel = (r.type === 'http' || r.type === 'https') ? 'HTTP(S)' : r.type.toUpperCase();
+                    const rtMs = r.response_time_ms != null ? r.response_time_ms + ' ms' : '-';
                     html += '<div style="background:' + bg + ';border:1px solid ' + color + '33;border-radius:8px;padding:12px">'
                         + '<div style="font-weight:600;margin-bottom:4px">' + r.name + '</div>'
                         + '<div style="color:' + color + ';font-size:0.9rem;font-weight:500">' + status + '</div>'
                         + '<div style="color:#64748b;font-size:0.75rem;margin-top:4px">' + typeLabel + ' &middot; ' + (r.host || '') + '</div>'
+                        + '<div style="color:#64748b;font-size:0.75rem;margin-top:2px">Response: ' + rtMs + '</div>'
                         + '</div>';
                 });
                 html += '</div>';
+                if (lastCheck) {
+                    const ago = Math.round((Date.now() / 1000 - lastCheck));
+                    html += '<p style="color:#64748b;font-size:0.75rem;margin-top:12px">Last checked: '
+                        + (ago < 60 ? ago + 's ago' : Math.round(ago / 60) + 'm ago') + '</p>';
+                }
                 el.innerHTML = html;
             } catch(e) {
                 el.innerHTML = '<p style="color:#ef4444">Failed to check servers: ' + e + '</p>';
