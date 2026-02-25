@@ -698,7 +698,7 @@ class ServerMonitoringPlugin(PluginBase):
         <style>
         .mon-row {{ display: flex; align-items: center; padding: 8px 0; border-bottom: 1px solid #1e293b; }}
         .mon-header {{ border-bottom-color: #334155; color: #94a3b8; font-size: 0.75rem; padding: 4px 0; }}
-        .mon-c-type {{ width: 80px; flex-shrink: 0; padding: 0 8px; }}
+        .mon-c-type {{ width: 100px; flex-shrink: 0; padding: 0 8px; }}
         .mon-c-name {{ flex: 1; min-width: 80px; padding: 0 8px; }}
         .mon-c-target {{ flex: 2; min-width: 100px; padding: 0 8px; }}
         .mon-c-end {{ width: 170px; flex-shrink: 0; padding: 0 8px; }}
