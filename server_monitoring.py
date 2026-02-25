@@ -482,10 +482,7 @@ class ServerMonitoringPlugin(PluginBase):
     window.monDel = async function(index) {
         if (!confirm('Delete this server?')) return;
         try {
-            var r = await fetch(MON_ACT + '/servers/' + index + '/delete', {
-                method: 'POST',
-                headers: {'Content-Type': 'application/json'},
-            });
+            var r = await fetch(MON_ACT + '/servers/' + index + '/delete', {method: 'POST'});
             var d = await r.json();
             if (d.success) {
                 monRefresh();
