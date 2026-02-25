@@ -349,7 +349,7 @@ class ServerMonitoringPlugin(PluginBase):
                 rows += (
                     f'<tr id="mon-row-{i}" style="border-bottom:1px solid #1e293b">'
                     f'<td style="padding:6px 8px;color:#94a3b8;font-size:0.85rem">{type_label}</td>'
-                    f'<td style="padding:6px 8px;font-weight:500">{name}</td>'
+                    f'<td style="padding:6px 8px;font-weight:500; max-width:200px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap">{name}</td>'
                     f'<td style="padding:6px 8px;color:#94a3b8;font-size:0.85rem">{target}</td>'
                     f'<td id="mon-st-{i}" style="padding:6px 8px;text-align:center;color:#64748b;font-size:0.85rem">-</td>'
                     f'<td style="padding:4px 8px;text-align:right;white-space:nowrap">'
@@ -362,7 +362,7 @@ class ServerMonitoringPlugin(PluginBase):
                 '<table style="width:100%;border-collapse:collapse">'
                 '<tr style="border-bottom:1px solid #334155;color:#94a3b8;font-size:0.75rem">'
                 '<th style="text-align:left;padding:4px 8px">Type</th>'
-                '<th style="text-align:left;padding:4px 8px">Name</th>'
+                '<th style="text-align:left;padding:4px 8px; max-width:200px">Name</th>'
                 '<th style="text-align:left;padding:4px 8px">Target</th>'
                 '<th style="text-align:center;padding:4px 8px;width:80px">Status</th>'
                 '<th style="text-align:right;padding:4px 8px;width:160px"></th></tr>'
@@ -647,7 +647,7 @@ class ServerMonitoringPlugin(PluginBase):
                             <option value="ssh">SSH</option>
                         </select>
                     </div>
-                    <div style="flex:1;min-width:120px">
+                    <div style="flex:1;max-width:120px">
                         <label style="font-size:0.75rem;color:#64748b;display:block;margin-bottom:2px">Name</label>
                         <input id="mon-name" type="text" placeholder="Web Server" style="width:100%">
                     </div>
