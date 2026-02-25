@@ -437,11 +437,14 @@ class ServerMonitoringPlugin(PluginBase):
             hostWrap.style.display = 'none';
             portWrap.style.display = 'none';
             urlWrap.style.display = '';
-        } else {
+        } else if (type === 'ssh') {
             hostWrap.style.display = '';
             portWrap.style.display = '';
             urlWrap.style.display = 'none';
-            document.getElementById('mon-port').placeholder = type === 'ssh' ? '22' : '';
+        } else {
+            hostWrap.style.display = '';
+            portWrap.style.display = 'none';
+            urlWrap.style.display = 'none';
         }
     };
 
@@ -527,22 +530,27 @@ class ServerMonitoringPlugin(PluginBase):
         var row = document.getElementById('mon-row-' + index);
         if (!row || !s) return;
         var isHttp = s.type === 'http' || s.type === 'https';
-        row.innerHTML = '<td colspan="4" style="padding:6px 8px">'
-            + '<div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap">'
-            + '<select id="mon-et-' + index + '" onchange="monEditType(' + index + ')" style="width:90px">'
+        var isSsh = s.type === 'ssh';
+        row.innerHTML = '<td style="padding:6px 8px">'
+            + '<input id="mon-en-' + index + '" value="' + _esc(s.name) + '" placeholder="Name" style="width:100%">'
+            + '</td>'
+            + '<td style="padding:6px 8px">'
+            + '<select id="mon-et-' + index + '" onchange="monEditType(' + index + ')" style="width:100%">'
             + '<option value="ping"' + (s.type === 'ping' ? ' selected' : '') + '>Ping</option>'
             + '<option value="http"' + (isHttp ? ' selected' : '') + '>HTTP(S)</option>'
-            + '<option value="ssh"' + (s.type === 'ssh' ? ' selected' : '') + '>SSH</option>'
+            + '<option value="ssh"' + (isSsh ? ' selected' : '') + '>SSH</option>'
             + '</select>'
-            + '<input id="mon-en-' + index + '" value="' + _esc(s.name) + '" placeholder="Name" style="flex:1;min-width:100px">'
+            + '</td>'
+            + '<td style="padding:6px 8px">'
             + '<span id="mon-ehw-' + index + '"' + (isHttp ? ' style="display:none"' : '') + '>'
-            + '<input id="mon-eh-' + index + '" value="' + _esc(s.host || '') + '" placeholder="Host / IP" style="width:150px">'
-            + ' <input id="mon-ep-' + index + '" value="' + _esc(String(s.port || '')) + '" placeholder="Port" style="width:60px">'
+            + '<input id="mon-eh-' + index + '" value="' + _esc(s.host || '') + '" placeholder="Host / IP" style="width:' + (isSsh ? '70%' : '100%') + '">'
+            + '<input id="mon-ep-' + index + '" value="' + _esc(String(s.port || '')) + '" placeholder="22" style="width:25%;margin-left:5%' + (isSsh ? '' : ';display:none') + '">'
             + '</span>'
             + '<span id="mon-euw-' + index + '"' + (!isHttp ? ' style="display:none"' : '') + '>'
-            + '<input id="mon-eu-' + index + '" value="' + _esc(s.url || '') + '" placeholder="URL" style="width:240px">'
+            + '<input id="mon-eu-' + index + '" value="' + _esc(s.url || '') + '" placeholder="URL" style="width:100%">'
             + '</span>'
-            + '</div></td>'
+            + '</td>'
+            + '<td></td>'
             + '<td style="padding:4px 8px;text-align:right;white-space:nowrap">'
             + '<button class="btn-sm" onclick="monSaveEdit(' + index + ')" style="margin-right:4px;font-size:0.75rem;padding:2px 8px;background:#166534">Save</button>'
             + '<button class="btn-sm" onclick="monCancelEdit()" style="font-size:0.75rem;padding:2px 8px">Cancel</button>'
@@ -553,12 +561,21 @@ class ServerMonitoringPlugin(PluginBase):
         var type = document.getElementById('mon-et-' + index).value;
         var hw = document.getElementById('mon-ehw-' + index);
         var uw = document.getElementById('mon-euw-' + index);
+        var ep = document.getElementById('mon-ep-' + index);
+        var eh = document.getElementById('mon-eh-' + index);
         if (type === 'http') {
             hw.style.display = 'none';
             uw.style.display = '';
+        } else if (type === 'ssh') {
+            hw.style.display = '';
+            uw.style.display = 'none';
+            ep.style.display = '';
+            eh.style.width = '70%';
         } else {
             hw.style.display = '';
             uw.style.display = 'none';
+            ep.style.display = 'none';
+            eh.style.width = '100%';
         }
     };
 
@@ -638,9 +655,9 @@ class ServerMonitoringPlugin(PluginBase):
                         <label style="font-size:0.75rem;color:#64748b;display:block;margin-bottom:2px">Host / IP</label>
                         <input id="mon-host" type="text" placeholder="192.168.1.1" style="width:100%">
                     </div>
-                    <div id="mon-port-wrap" style="width:80px">
+                    <div id="mon-port-wrap" style="width:80px;display:none">
                         <label style="font-size:0.75rem;color:#64748b;display:block;margin-bottom:2px">Port</label>
-                        <input id="mon-port" type="text" placeholder="" style="width:100%">
+                        <input id="mon-port" type="text" placeholder="22" style="width:100%">
                     </div>
                     <div id="mon-url-wrap" style="flex:2;min-width:200px;display:none">
                         <label style="font-size:0.75rem;color:#64748b;display:block;margin-bottom:2px">URL</label>
