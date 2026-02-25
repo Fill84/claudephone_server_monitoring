@@ -199,6 +199,7 @@ class ServerMonitoringPlugin(PluginBase):
             return {"error": "Invalid server index"}
         removed = servers.pop(index)
         self._save_servers(servers)
+        logger.info("Deleted server %s (index %d), %d remaining", removed.get("name"), index, len(servers))
         return {"success": True, "removed": removed}
 
     def _action_test_server(self, index: int) -> dict:
@@ -420,9 +421,9 @@ class ServerMonitoringPlugin(PluginBase):
             const host = document.getElementById('mon-host').value.trim();
             const port = document.getElementById('mon-port').value.trim();
             const url = document.getElementById('mon-url').value.trim();
-            if (!name) {{ toast('Name is required', 'error'); return; }}
-            if (type === 'http' && !url) {{ toast('URL is required for HTTP(S)', 'error'); return; }}
-            if ((type === 'ping' || type === 'ssh') && !host) {{ toast('Host is required', 'error'); return; }}
+            if (!name) {{ alert('Name is required'); return; }}
+            if (type === 'http' && !url) {{ alert('URL is required for HTTP(S)'); return; }}
+            if ((type === 'ping' || type === 'ssh') && !host) {{ alert('Host is required'); return; }}
             try {{
                 const body = {{name, type, host, port, url}};
                 if (type === 'http' && url.startsWith('https://')) body.type = 'https';
@@ -433,16 +434,19 @@ class ServerMonitoringPlugin(PluginBase):
                 }});
                 const d = await r.json();
                 if (d.success) {{
-                    toast('Server added!', 'success');
                     document.getElementById('mon-name').value = '';
                     document.getElementById('mon-host').value = '';
                     document.getElementById('mon-port').value = '';
                     document.getElementById('mon-url').value = '';
                     monRefresh();
+                    try {{ toast('Server added!', 'success'); }} catch(_) {{}}
                 }} else {{
-                    toast(d.error || 'Failed to add server', 'error');
+                    const msg = d.error || 'Failed to add server';
+                    try {{ toast(msg, 'error'); }} catch(_) {{ alert(msg); }}
                 }}
-            }} catch(e) {{ toast('Error: ' + e, 'error'); }}
+            }} catch(e) {{
+                try {{ toast('Error: ' + e, 'error'); }} catch(_) {{ alert('Error: ' + e); }}
+            }}
         }}
 
         async function monDel(index) {{
@@ -451,12 +455,15 @@ class ServerMonitoringPlugin(PluginBase):
                 const r = await fetch(MON_ACT + '/servers/' + index + '/delete', {{method: 'POST'}});
                 const d = await r.json();
                 if (d.success) {{
-                    toast('Server removed', 'success');
                     monRefresh();
+                    try {{ toast('Server removed', 'success'); }} catch(_) {{}}
                 }} else {{
-                    toast(d.error || 'Failed to delete', 'error');
+                    const msg = d.error || 'Failed to delete';
+                    try {{ toast(msg, 'error'); }} catch(_) {{ alert(msg); }}
                 }}
-            }} catch(e) {{ toast('Error: ' + e, 'error'); }}
+            }} catch(e) {{
+                try {{ toast('Error: ' + e, 'error'); }} catch(_) {{ alert('Error: ' + e); }}
+            }}
         }}
 
         async function monTest(index) {{

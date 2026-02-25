@@ -124,7 +124,11 @@ class MonitoringHandler:
         return result
 
     def _check_ping(self, host: str) -> bool:
-        """Ping a host and return True if reachable."""
+        """Ping a host and return True if reachable.
+
+        Tries ICMP ping first. If the ping binary is not available
+        (e.g. inside Docker), falls back to TCP connection attempts.
+        """
         if not host:
             return False
         try:
@@ -134,8 +138,36 @@ class MonitoringHandler:
                 cmd = ["ping", "-c", "1", "-W", "2", host]
             result = subprocess.run(cmd, capture_output=True, timeout=5)
             return result.returncode == 0
+        except FileNotFoundError:
+            logger.debug("ping binary not found, using TCP fallback for %s", host)
+            return self._tcp_ping(host)
         except (subprocess.TimeoutExpired, Exception):
             return False
+
+    def _tcp_ping(self, host: str, ports: tuple = (80, 443, 22)) -> bool:
+        """TCP-based reachability check as fallback when ping is unavailable.
+
+        A ConnectionRefusedError still means the host is up (it sent RST).
+        Only timeouts and network errors indicate the host is truly unreachable.
+        """
+        for port in ports:
+            sock = None
+            try:
+                sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                sock.settimeout(2)
+                sock.connect((host, port))
+                return True
+            except ConnectionRefusedError:
+                return True
+            except (socket.timeout, OSError):
+                continue
+            finally:
+                if sock:
+                    try:
+                        sock.close()
+                    except Exception:
+                        pass
+        return False
 
     def _check_ssh(self, host: str, port: int = 22) -> bool:
         """Check if an SSH port is open and responding."""
