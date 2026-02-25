@@ -27,6 +27,8 @@ class MonitoringHandler:
     def update_servers(self, servers: List[Dict[str, Any]]) -> None:
         """Update the server list at runtime."""
         self.servers = servers
+        self._last_results = []
+        self._last_check_time = 0.0
 
     def handle(self, text: str, language: str = "en") -> str:
         """Handle a monitoring query."""
