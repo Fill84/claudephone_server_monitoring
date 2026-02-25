@@ -1,5 +1,6 @@
 """Server monitoring plugin - health checks via ping, HTTP(S), and SSH."""
 
+import html as html_mod
 import json
 import logging
 import re
@@ -155,7 +156,7 @@ class ServerMonitoringPlugin(PluginBase):
         if action == "servers/add":
             return self._action_add_server(data)
 
-        m = re.match(r"^servers/(\d+)/(delete|test)$", action)
+        m = re.match(r"^servers/(\d+)/(delete|test|update)$", action)
         if m:
             index = int(m.group(1))
             op = m.group(2)
@@ -163,6 +164,8 @@ class ServerMonitoringPlugin(PluginBase):
                 return self._action_delete_server(index)
             if op == "test":
                 return self._action_test_server(index)
+            if op == "update":
+                return self._action_update_server(index, data)
 
         return {"error": "Unknown action"}
 
@@ -209,6 +212,37 @@ class ServerMonitoringPlugin(PluginBase):
         from .handler import MonitoringHandler
         handler = MonitoringHandler(servers)
         return handler._check_server(servers[index])
+
+    def _action_update_server(self, index: int, data: dict) -> dict:
+        servers = self._load_servers()
+        if index < 0 or index >= len(servers):
+            return {"error": "Invalid server index"}
+
+        name = data.get("name", "").strip()
+        check_type = data.get("type", "ping").strip().lower()
+        host = data.get("host", "").strip()
+        port = data.get("port", "").strip()
+        url = data.get("url", "").strip()
+
+        if not name:
+            return {"error": "Server name is required"}
+        if check_type in ("http", "https") and not url:
+            return {"error": "URL is required for HTTP(S)"}
+        if check_type in ("ping", "ssh") and not host:
+            return {"error": "Host is required for " + check_type.upper()}
+        if check_type not in ("ping", "http", "https", "ssh"):
+            return {"error": "Type must be ping, http, https, or ssh"}
+
+        server = {"name": name, "type": check_type, "host": host}
+        if port:
+            server["port"] = int(port)
+        if url:
+            server["url"] = url
+
+        servers[index] = server
+        self._save_servers(servers)
+        logger.info("Updated server %s (index %d)", name, index)
+        return {"success": True, "server": server}
 
     def _action_full_status(self) -> dict:
         """Return full status from the last monitoring cycle."""
@@ -298,8 +332,286 @@ class ServerMonitoringPlugin(PluginBase):
     def _render_settings_page(self) -> str:
         """Settings page with server management form."""
         interval = self.context.get_env("MONITORING_CHECK_INTERVAL", "60") if self.context else "60"
-        # Embed initial server list so page renders instantly without API call
-        servers_json = json.dumps(self._load_servers())
+        servers = self._load_servers()
+        servers_json = json.dumps(servers)
+
+        # Build server table HTML server-side so it renders without JS
+        if servers:
+            rows = ""
+            for i, s in enumerate(servers):
+                name = html_mod.escape(s.get("name", ""))
+                stype = s.get("type", "ping")
+                type_label = "HTTP(S)" if stype in ("http", "https") else stype.upper()
+                target_raw = s.get("url") or (
+                    s.get("host", "") + (":" + str(s["port"]) if s.get("port") else "")
+                )
+                target = html_mod.escape(target_raw)
+                rows += (
+                    f'<tr id="mon-row-{i}" style="border-bottom:1px solid #1e293b">'
+                    f'<td style="padding:6px 8px;font-weight:500">{name}</td>'
+                    f'<td style="padding:6px 8px;color:#94a3b8;font-size:0.85rem">{type_label}</td>'
+                    f'<td style="padding:6px 8px;color:#94a3b8;font-size:0.85rem">{target}</td>'
+                    f'<td id="mon-st-{i}" style="padding:6px 8px;text-align:center;color:#64748b;font-size:0.85rem">-</td>'
+                    f'<td style="padding:4px 8px;text-align:right;white-space:nowrap">'
+                    f'<button class="btn-sm" onclick="monEdit({i})" style="margin-right:4px;font-size:0.75rem;padding:2px 8px">Edit</button>'
+                    f'<button class="btn-sm" onclick="monTest({i})" style="margin-right:4px;font-size:0.75rem;padding:2px 8px">Test</button>'
+                    f'<button class="btn-sm" onclick="monDel({i})" style="background:#7f1d1d;font-size:0.75rem;padding:2px 8px">Delete</button>'
+                    f"</td></tr>"
+                )
+            table_html = (
+                '<table style="width:100%;border-collapse:collapse">'
+                '<tr style="border-bottom:1px solid #334155;color:#94a3b8;font-size:0.75rem">'
+                '<th style="text-align:left;padding:4px 8px">Name</th>'
+                '<th style="text-align:left;padding:4px 8px">Type</th>'
+                '<th style="text-align:left;padding:4px 8px">Target</th>'
+                '<th style="text-align:center;padding:4px 8px;width:80px">Status</th>'
+                '<th style="text-align:right;padding:4px 8px;width:160px"></th></tr>'
+                + rows + "</table>"
+            )
+        else:
+            table_html = '<p style="color:#64748b;margin:0">No servers configured yet. Add one below.</p>'
+
+        # JavaScript in a regular string to avoid f-string brace escaping
+        js_code = """
+(function() {
+    var MON_ACT = '/api/plugins/server_monitoring/action';
+    var monServers = __SERVERS_JSON__;
+
+    function _esc(s) {
+        if (!s && s !== 0) return '';
+        var d = document.createElement('div');
+        d.textContent = String(s);
+        return d.innerHTML.replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+    }
+
+    function monRender(servers) {
+        monServers = servers;
+        var el = document.getElementById('mon-server-list');
+        if (!el) return;
+        if (!servers.length) {
+            el.innerHTML = '<p style="color:#64748b;margin:0">No servers configured yet. Add one below.</p>';
+            return;
+        }
+        var h = '<table style="width:100%;border-collapse:collapse">';
+        h += '<tr style="border-bottom:1px solid #334155;color:#94a3b8;font-size:0.75rem">'
+            + '<th style="text-align:left;padding:4px 8px">Name</th>'
+            + '<th style="text-align:left;padding:4px 8px">Type</th>'
+            + '<th style="text-align:left;padding:4px 8px">Target</th>'
+            + '<th style="text-align:center;padding:4px 8px;width:80px">Status</th>'
+            + '<th style="text-align:right;padding:4px 8px;width:160px"></th></tr>';
+        servers.forEach(function(s, i) {
+            var tl = (s.type === 'http' || s.type === 'https') ? 'HTTP(S)' : s.type.toUpperCase();
+            var tgt = s.url || (s.host + (s.port ? ':' + s.port : ''));
+            h += '<tr id="mon-row-' + i + '" style="border-bottom:1px solid #1e293b">'
+                + '<td style="padding:6px 8px;font-weight:500">' + _esc(s.name) + '</td>'
+                + '<td style="padding:6px 8px;color:#94a3b8;font-size:0.85rem">' + tl + '</td>'
+                + '<td style="padding:6px 8px;color:#94a3b8;font-size:0.85rem">' + _esc(tgt) + '</td>'
+                + '<td id="mon-st-' + i + '" style="padding:6px 8px;text-align:center;color:#64748b;font-size:0.85rem">-</td>'
+                + '<td style="padding:4px 8px;text-align:right;white-space:nowrap">'
+                + '<button class="btn-sm" onclick="monEdit(' + i + ')" style="margin-right:4px;font-size:0.75rem;padding:2px 8px">Edit</button>'
+                + '<button class="btn-sm" onclick="monTest(' + i + ')" style="margin-right:4px;font-size:0.75rem;padding:2px 8px">Test</button>'
+                + '<button class="btn-sm" onclick="monDel(' + i + ')" style="background:#7f1d1d;font-size:0.75rem;padding:2px 8px">Delete</button>'
+                + '</td></tr>';
+        });
+        h += '</table>';
+        el.innerHTML = h;
+    }
+
+    async function monRefresh() {
+        try {
+            var r = await fetch(MON_ACT + '/servers/list');
+            var d = await r.json();
+            monRender(d.servers || []);
+        } catch(e) {
+            var el = document.getElementById('mon-server-list');
+            if (el) el.innerHTML = '<p style="color:#ef4444">Failed to load servers: ' + e + '</p>';
+        }
+    }
+
+    window.monTypeChanged = function() {
+        var type = document.getElementById('mon-type').value;
+        var hostWrap = document.getElementById('mon-host-wrap');
+        var portWrap = document.getElementById('mon-port-wrap');
+        var urlWrap = document.getElementById('mon-url-wrap');
+        if (type === 'http') {
+            hostWrap.style.display = 'none';
+            portWrap.style.display = 'none';
+            urlWrap.style.display = '';
+        } else {
+            hostWrap.style.display = '';
+            portWrap.style.display = '';
+            urlWrap.style.display = 'none';
+            document.getElementById('mon-port').placeholder = type === 'ssh' ? '22' : '';
+        }
+    };
+
+    window.monAdd = async function() {
+        var type = document.getElementById('mon-type').value;
+        var name = document.getElementById('mon-name').value.trim();
+        var host = document.getElementById('mon-host').value.trim();
+        var port = document.getElementById('mon-port').value.trim();
+        var url = document.getElementById('mon-url').value.trim();
+        if (!name) { alert('Name is required'); return; }
+        if (type === 'http' && !url) { alert('URL is required for HTTP(S)'); return; }
+        if ((type === 'ping' || type === 'ssh') && !host) { alert('Host is required'); return; }
+        try {
+            var body = {name: name, type: type, host: host, port: port, url: url};
+            if (type === 'http' && url.startsWith('https://')) body.type = 'https';
+            var r = await fetch(MON_ACT + '/servers/add', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify(body),
+            });
+            var d = await r.json();
+            if (d.success) {
+                document.getElementById('mon-name').value = '';
+                document.getElementById('mon-host').value = '';
+                document.getElementById('mon-port').value = '';
+                document.getElementById('mon-url').value = '';
+                monRefresh();
+                try { toast('Server added!', 'success'); } catch(_) {}
+            } else {
+                var msg = d.error || 'Failed to add server';
+                try { toast(msg, 'error'); } catch(_) { alert(msg); }
+            }
+        } catch(e) {
+            try { toast('Error: ' + e, 'error'); } catch(_) { alert('Error: ' + e); }
+        }
+    };
+
+    window.monDel = async function(index) {
+        if (!confirm('Delete this server?')) return;
+        try {
+            var r = await fetch(MON_ACT + '/servers/' + index + '/delete', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+            });
+            var d = await r.json();
+            if (d.success) {
+                monRefresh();
+                try { toast('Server removed', 'success'); } catch(_) {}
+            } else {
+                var msg = d.error || 'Failed to delete';
+                try { toast(msg, 'error'); } catch(_) { alert(msg); }
+            }
+        } catch(e) {
+            try { toast('Error: ' + e, 'error'); } catch(_) { alert('Error: ' + e); }
+        }
+    };
+
+    window.monTest = async function(index) {
+        var el = document.getElementById('mon-st-' + index);
+        if (!el) return;
+        el.innerHTML = '...';
+        el.style.color = '#94a3b8';
+        try {
+            var r = await fetch(MON_ACT + '/servers/' + index + '/test', {method: 'POST'});
+            var d = await r.json();
+            var rt = d.response_time_ms != null ? ' (' + d.response_time_ms + 'ms)' : '';
+            if (d.online) {
+                el.innerHTML = '&#9679; Online' + rt;
+                el.style.color = '#22c55e';
+            } else {
+                el.innerHTML = '&#9679; Offline';
+                el.style.color = '#ef4444';
+            }
+        } catch(e) {
+            el.innerHTML = 'Error';
+            el.style.color = '#ef4444';
+        }
+    };
+
+    window.monTestAll = async function() {
+        for (var i = 0; i < monServers.length; i++) window.monTest(i);
+    };
+
+    window.monEdit = function(index) {
+        var s = monServers[index];
+        var row = document.getElementById('mon-row-' + index);
+        if (!row || !s) return;
+        var isHttp = s.type === 'http' || s.type === 'https';
+        row.innerHTML = '<td colspan="4" style="padding:6px 8px">'
+            + '<div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap">'
+            + '<select id="mon-et-' + index + '" onchange="monEditType(' + index + ')" style="width:90px">'
+            + '<option value="ping"' + (s.type === 'ping' ? ' selected' : '') + '>Ping</option>'
+            + '<option value="http"' + (isHttp ? ' selected' : '') + '>HTTP(S)</option>'
+            + '<option value="ssh"' + (s.type === 'ssh' ? ' selected' : '') + '>SSH</option>'
+            + '</select>'
+            + '<input id="mon-en-' + index + '" value="' + _esc(s.name) + '" placeholder="Name" style="flex:1;min-width:100px">'
+            + '<span id="mon-ehw-' + index + '"' + (isHttp ? ' style="display:none"' : '') + '>'
+            + '<input id="mon-eh-' + index + '" value="' + _esc(s.host || '') + '" placeholder="Host / IP" style="width:150px">'
+            + ' <input id="mon-ep-' + index + '" value="' + _esc(String(s.port || '')) + '" placeholder="Port" style="width:60px">'
+            + '</span>'
+            + '<span id="mon-euw-' + index + '"' + (!isHttp ? ' style="display:none"' : '') + '>'
+            + '<input id="mon-eu-' + index + '" value="' + _esc(s.url || '') + '" placeholder="URL" style="width:240px">'
+            + '</span>'
+            + '</div></td>'
+            + '<td style="padding:4px 8px;text-align:right;white-space:nowrap">'
+            + '<button class="btn-sm" onclick="monSaveEdit(' + index + ')" style="margin-right:4px;font-size:0.75rem;padding:2px 8px;background:#166534">Save</button>'
+            + '<button class="btn-sm" onclick="monCancelEdit()" style="font-size:0.75rem;padding:2px 8px">Cancel</button>'
+            + '</td>';
+    };
+
+    window.monEditType = function(index) {
+        var type = document.getElementById('mon-et-' + index).value;
+        var hw = document.getElementById('mon-ehw-' + index);
+        var uw = document.getElementById('mon-euw-' + index);
+        if (type === 'http') {
+            hw.style.display = 'none';
+            uw.style.display = '';
+        } else {
+            hw.style.display = '';
+            uw.style.display = 'none';
+        }
+    };
+
+    window.monSaveEdit = async function(index) {
+        var type = document.getElementById('mon-et-' + index).value;
+        var name = document.getElementById('mon-en-' + index).value.trim();
+        var host = document.getElementById('mon-eh-' + index).value.trim();
+        var port = document.getElementById('mon-ep-' + index).value.trim();
+        var url = document.getElementById('mon-eu-' + index).value.trim();
+        if (!name) { alert('Name is required'); return; }
+        var body = {name: name, type: type, host: host, port: port, url: url};
+        if (type === 'http' && url.startsWith('https://')) body.type = 'https';
+        try {
+            var r = await fetch(MON_ACT + '/servers/' + index + '/update', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify(body),
+            });
+            var d = await r.json();
+            if (d.success) {
+                monRefresh();
+                try { toast('Server updated!', 'success'); } catch(_) {}
+            } else {
+                var msg = d.error || 'Update failed';
+                try { toast(msg, 'error'); } catch(_) { alert(msg); }
+            }
+        } catch(e) {
+            try { toast('Error: ' + e, 'error'); } catch(_) { alert('Error: ' + e); }
+        }
+    };
+
+    window.monCancelEdit = function() {
+        monRender(monServers);
+    };
+
+    window.monSaveInterval = async function() {
+        var val = document.getElementById('mon-interval').value;
+        try {
+            await fetch('/api/config/', {
+                method: 'PUT',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({key: 'MONITORING_CHECK_INTERVAL', value: val}),
+            });
+            try { toast('Interval saved!', 'success'); } catch(_) {}
+        } catch(e) {
+            try { toast('Save failed: ' + e, 'error'); } catch(_) { alert('Save failed: ' + e); }
+        }
+    };
+})();
+""".replace("__SERVERS_JSON__", servers_json)
 
         return f"""
         <div class="card" style="margin-bottom:16px">
@@ -308,7 +620,7 @@ class ServerMonitoringPlugin(PluginBase):
                 <button class="btn-sm" onclick="monTestAll()">Test All</button>
             </div>
             <div id="mon-server-list">
-                <p style="color:#94a3b8">Loading...</p>
+                {table_html}
             </div>
             <div style="border-top:1px solid #334155;margin-top:16px;padding-top:16px">
                 <h4 style="margin:0 0 12px 0;font-size:0.9rem;color:#94a3b8">Add Server</h4>
@@ -352,160 +664,7 @@ class ServerMonitoringPlugin(PluginBase):
                 <small style="color:#64748b">How often the background monitoring loop checks all servers.</small>
             </div>
         </div>
-        <script>
-        const MON_ACT = '/api/plugins/server_monitoring/action';
-        let monServers = {servers_json};
-
-        function monTypeChanged() {{
-            const type = document.getElementById('mon-type').value;
-            const hostWrap = document.getElementById('mon-host-wrap');
-            const portWrap = document.getElementById('mon-port-wrap');
-            const urlWrap = document.getElementById('mon-url-wrap');
-            if (type === 'http') {{
-                hostWrap.style.display = 'none';
-                portWrap.style.display = 'none';
-                urlWrap.style.display = '';
-            }} else {{
-                hostWrap.style.display = '';
-                portWrap.style.display = '';
-                urlWrap.style.display = 'none';
-                document.getElementById('mon-port').placeholder = type === 'ssh' ? '22' : '';
-            }}
-        }}
-
-        function monRender(servers) {{
-            monServers = servers;
-            const el = document.getElementById('mon-server-list');
-            if (!servers.length) {{
-                el.innerHTML = '<p style="color:#64748b;margin:0">No servers configured yet. Add one below.</p>';
-                return;
-            }}
-            let html = '<table style="width:100%;border-collapse:collapse">';
-            html += '<tr style="border-bottom:1px solid #334155;color:#94a3b8;font-size:0.75rem">'
-                + '<th style="text-align:left;padding:4px 8px">Name</th>'
-                + '<th style="text-align:left;padding:4px 8px">Type</th>'
-                + '<th style="text-align:left;padding:4px 8px">Target</th>'
-                + '<th style="text-align:center;padding:4px 8px;width:80px">Status</th>'
-                + '<th style="text-align:right;padding:4px 8px;width:120px"></th></tr>';
-            servers.forEach((s, i) => {{
-                const typeLabel = (s.type === 'http' || s.type === 'https') ? 'HTTP(S)' : s.type.toUpperCase();
-                const target = s.url || (s.host + (s.port ? ':' + s.port : ''));
-                html += '<tr style="border-bottom:1px solid #1e293b">'
-                    + '<td style="padding:6px 8px;font-weight:500">' + s.name + '</td>'
-                    + '<td style="padding:6px 8px;color:#94a3b8;font-size:0.85rem">' + typeLabel + '</td>'
-                    + '<td style="padding:6px 8px;color:#94a3b8;font-size:0.85rem">' + target + '</td>'
-                    + '<td id="mon-st-' + i + '" style="padding:6px 8px;text-align:center;color:#64748b;font-size:0.85rem">-</td>'
-                    + '<td style="padding:4px 8px;text-align:right;white-space:nowrap">'
-                    + '<button class="btn-sm" onclick="monTest(' + i + ')" style="margin-right:4px;font-size:0.75rem;padding:2px 8px">Test</button>'
-                    + '<button class="btn-sm" onclick="monDel(' + i + ')" style="background:#7f1d1d;font-size:0.75rem;padding:2px 8px">Delete</button>'
-                    + '</td></tr>';
-            }});
-            html += '</table>';
-            el.innerHTML = html;
-        }}
-
-        async function monRefresh() {{
-            try {{
-                const r = await fetch(MON_ACT + '/servers/list');
-                const d = await r.json();
-                monRender(d.servers || []);
-            }} catch(e) {{
-                document.getElementById('mon-server-list').innerHTML =
-                    '<p style="color:#ef4444">Failed to load servers: ' + e + '</p>';
-            }}
-        }}
-
-        async function monAdd() {{
-            const type = document.getElementById('mon-type').value;
-            const name = document.getElementById('mon-name').value.trim();
-            const host = document.getElementById('mon-host').value.trim();
-            const port = document.getElementById('mon-port').value.trim();
-            const url = document.getElementById('mon-url').value.trim();
-            if (!name) {{ alert('Name is required'); return; }}
-            if (type === 'http' && !url) {{ alert('URL is required for HTTP(S)'); return; }}
-            if ((type === 'ping' || type === 'ssh') && !host) {{ alert('Host is required'); return; }}
-            try {{
-                const body = {{name, type, host, port, url}};
-                if (type === 'http' && url.startsWith('https://')) body.type = 'https';
-                const r = await fetch(MON_ACT + '/servers/add', {{
-                    method: 'POST',
-                    headers: {{'Content-Type': 'application/json'}},
-                    body: JSON.stringify(body),
-                }});
-                const d = await r.json();
-                if (d.success) {{
-                    document.getElementById('mon-name').value = '';
-                    document.getElementById('mon-host').value = '';
-                    document.getElementById('mon-port').value = '';
-                    document.getElementById('mon-url').value = '';
-                    monRefresh();
-                    try {{ toast('Server added!', 'success'); }} catch(_) {{}}
-                }} else {{
-                    const msg = d.error || 'Failed to add server';
-                    try {{ toast(msg, 'error'); }} catch(_) {{ alert(msg); }}
-                }}
-            }} catch(e) {{
-                try {{ toast('Error: ' + e, 'error'); }} catch(_) {{ alert('Error: ' + e); }}
-            }}
-        }}
-
-        async function monDel(index) {{
-            if (!confirm('Delete this server?')) return;
-            try {{
-                const r = await fetch(MON_ACT + '/servers/' + index + '/delete', {{method: 'POST'}});
-                const d = await r.json();
-                if (d.success) {{
-                    monRefresh();
-                    try {{ toast('Server removed', 'success'); }} catch(_) {{}}
-                }} else {{
-                    const msg = d.error || 'Failed to delete';
-                    try {{ toast(msg, 'error'); }} catch(_) {{ alert(msg); }}
-                }}
-            }} catch(e) {{
-                try {{ toast('Error: ' + e, 'error'); }} catch(_) {{ alert('Error: ' + e); }}
-            }}
-        }}
-
-        async function monTest(index) {{
-            const el = document.getElementById('mon-st-' + index);
-            el.innerHTML = '...';
-            el.style.color = '#94a3b8';
-            try {{
-                const r = await fetch(MON_ACT + '/servers/' + index + '/test', {{method: 'POST'}});
-                const d = await r.json();
-                const rt = d.response_time_ms != null ? ' (' + d.response_time_ms + 'ms)' : '';
-                if (d.online) {{
-                    el.innerHTML = '&#9679; Online' + rt;
-                    el.style.color = '#22c55e';
-                }} else {{
-                    el.innerHTML = '&#9679; Offline';
-                    el.style.color = '#ef4444';
-                }}
-            }} catch(e) {{
-                el.innerHTML = 'Error';
-                el.style.color = '#ef4444';
-            }}
-        }}
-
-        async function monTestAll() {{
-            for (let i = 0; i < monServers.length; i++) monTest(i);
-        }}
-
-        async function monSaveInterval() {{
-            const val = document.getElementById('mon-interval').value;
-            try {{
-                await fetch('/api/config/', {{
-                    method: 'PUT',
-                    headers: {{'Content-Type': 'application/json'}},
-                    body: JSON.stringify({{key: 'MONITORING_CHECK_INTERVAL', value: val}}),
-                }});
-                toast('Interval saved!', 'success');
-            }} catch(e) {{ toast('Save failed: ' + e, 'error'); }}
-        }}
-
-        // Render immediately from embedded data (no API call needed)
-        monRender(monServers);
-        </script>
+        <script>{js_code}</script>
         """
 
     def _render_status_page(self) -> str:
