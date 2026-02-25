@@ -348,8 +348,8 @@ class ServerMonitoringPlugin(PluginBase):
                 target = html_mod.escape(target_raw)
                 rows += (
                     f'<tr id="mon-row-{i}" style="border-bottom:1px solid #1e293b">'
-                    f'<td style="padding:6px 8px;font-weight:500">{name}</td>'
                     f'<td style="padding:6px 8px;color:#94a3b8;font-size:0.85rem">{type_label}</td>'
+                    f'<td style="padding:6px 8px;font-weight:500">{name}</td>'
                     f'<td style="padding:6px 8px;color:#94a3b8;font-size:0.85rem">{target}</td>'
                     f'<td id="mon-st-{i}" style="padding:6px 8px;text-align:center;color:#64748b;font-size:0.85rem">-</td>'
                     f'<td style="padding:4px 8px;text-align:right;white-space:nowrap">'
@@ -361,8 +361,8 @@ class ServerMonitoringPlugin(PluginBase):
             table_html = (
                 '<table style="width:100%;border-collapse:collapse">'
                 '<tr style="border-bottom:1px solid #334155;color:#94a3b8;font-size:0.75rem">'
-                '<th style="text-align:left;padding:4px 8px">Name</th>'
                 '<th style="text-align:left;padding:4px 8px">Type</th>'
+                '<th style="text-align:left;padding:4px 8px">Name</th>'
                 '<th style="text-align:left;padding:4px 8px">Target</th>'
                 '<th style="text-align:center;padding:4px 8px;width:80px">Status</th>'
                 '<th style="text-align:right;padding:4px 8px;width:160px"></th></tr>'
@@ -394,8 +394,8 @@ class ServerMonitoringPlugin(PluginBase):
         }
         var h = '<table style="width:100%;border-collapse:collapse">';
         h += '<tr style="border-bottom:1px solid #334155;color:#94a3b8;font-size:0.75rem">'
-            + '<th style="text-align:left;padding:4px 8px">Name</th>'
             + '<th style="text-align:left;padding:4px 8px">Type</th>'
+            + '<th style="text-align:left;padding:4px 8px">Name</th>'
             + '<th style="text-align:left;padding:4px 8px">Target</th>'
             + '<th style="text-align:center;padding:4px 8px;width:80px">Status</th>'
             + '<th style="text-align:right;padding:4px 8px;width:160px"></th></tr>';
@@ -403,8 +403,8 @@ class ServerMonitoringPlugin(PluginBase):
             var tl = (s.type === 'http' || s.type === 'https') ? 'HTTP(S)' : s.type.toUpperCase();
             var tgt = s.url || (s.host + (s.port ? ':' + s.port : ''));
             h += '<tr id="mon-row-' + i + '" style="border-bottom:1px solid #1e293b">'
-                + '<td style="padding:6px 8px;font-weight:500">' + _esc(s.name) + '</td>'
                 + '<td style="padding:6px 8px;color:#94a3b8;font-size:0.85rem">' + tl + '</td>'
+                + '<td style="padding:6px 8px;font-weight:500">' + _esc(s.name) + '</td>'
                 + '<td style="padding:6px 8px;color:#94a3b8;font-size:0.85rem">' + _esc(tgt) + '</td>'
                 + '<td id="mon-st-' + i + '" style="padding:6px 8px;text-align:center;color:#64748b;font-size:0.85rem">-</td>'
                 + '<td style="padding:4px 8px;text-align:right;white-space:nowrap">'
@@ -532,14 +532,14 @@ class ServerMonitoringPlugin(PluginBase):
         var isHttp = s.type === 'http' || s.type === 'https';
         var isSsh = s.type === 'ssh';
         row.innerHTML = '<td style="padding:6px 8px">'
-            + '<input id="mon-en-' + index + '" value="' + _esc(s.name) + '" placeholder="Name" style="width:100%">'
-            + '</td>'
-            + '<td style="padding:6px 8px">'
             + '<select id="mon-et-' + index + '" onchange="monEditType(' + index + ')" style="width:100%">'
             + '<option value="ping"' + (s.type === 'ping' ? ' selected' : '') + '>Ping</option>'
             + '<option value="http"' + (isHttp ? ' selected' : '') + '>HTTP(S)</option>'
             + '<option value="ssh"' + (isSsh ? ' selected' : '') + '>SSH</option>'
             + '</select>'
+            + '</td>'
+            + '<td style="padding:6px 8px">'
+            + '<input id="mon-en-' + index + '" value="' + _esc(s.name) + '" placeholder="Name" style="width:100%">'
             + '</td>'
             + '<td style="padding:6px 8px">'
             + '<span id="mon-ehw-' + index + '"' + (isHttp ? ' style="display:none"' : '') + '>'
