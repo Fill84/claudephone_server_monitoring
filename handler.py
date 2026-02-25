@@ -1,6 +1,7 @@
-"""Server monitoring handler - health checks via ping and HTTP."""
+"""Server monitoring handler - health checks via ping, HTTP(S), and SSH."""
 
 import logging
+import socket
 import subprocess
 import sys
 from typing import Any, Dict, List
@@ -14,6 +15,10 @@ class MonitoringHandler:
     """Perform health checks on configured servers."""
 
     def __init__(self, servers: List[Dict[str, Any]]):
+        self.servers = servers
+
+    def update_servers(self, servers: List[Dict[str, Any]]) -> None:
+        """Update the server list at runtime."""
         self.servers = servers
 
     def handle(self, text: str, language: str = "en") -> str:
@@ -49,11 +54,14 @@ class MonitoringHandler:
         result = {"name": name, "host": host, "type": check_type, "online": False}
 
         try:
-            if check_type == "http" or check_type == "https":
+            if check_type in ("http", "https"):
                 target_url = url or f"{check_type}://{host}"
-                if port:
-                    target_url = url or f"{check_type}://{host}:{port}"
+                if port and not url:
+                    target_url = f"{check_type}://{host}:{port}"
                 result["online"] = self._check_http(target_url)
+            elif check_type == "ssh":
+                ssh_port = int(port) if port else 22
+                result["online"] = self._check_ssh(host, ssh_port)
             else:
                 result["online"] = self._check_ping(host)
         except Exception as e:
@@ -74,6 +82,21 @@ class MonitoringHandler:
             )
             return result.returncode == 0
         except (subprocess.TimeoutExpired, Exception):
+            return False
+
+    def _check_ssh(self, host: str, port: int = 22) -> bool:
+        """Check if an SSH port is open and responding."""
+        if not host:
+            return False
+        try:
+            sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            sock.settimeout(5)
+            sock.connect((host, port))
+            # Read the SSH banner to confirm it's actually SSH
+            banner = sock.recv(256)
+            sock.close()
+            return banner.startswith(b"SSH-")
+        except Exception:
             return False
 
     def _check_http(self, url: str) -> bool:
