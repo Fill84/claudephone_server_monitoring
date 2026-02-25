@@ -156,6 +156,9 @@ class ServerMonitoringPlugin(PluginBase):
         if action == "servers/add":
             return self._action_add_server(data)
 
+        if action == "servers/save-all":
+            return self._action_save_all_servers(data)
+
         m = re.match(r"^servers/(\d+)/(delete|test|update)$", action)
         if m:
             index = int(m.group(1))
@@ -243,6 +246,35 @@ class ServerMonitoringPlugin(PluginBase):
         self._save_servers(servers)
         logger.info("Updated server %s (index %d)", name, index)
         return {"success": True, "server": server}
+
+    def _action_save_all_servers(self, data: dict) -> dict:
+        """Replace the entire server list (batch save from edit mode)."""
+        servers = data.get("servers", [])
+        if not isinstance(servers, list):
+            return {"error": "Invalid server list"}
+        cleaned = []
+        for s in servers:
+            name = str(s.get("name", "")).strip()
+            check_type = str(s.get("type", "ping")).strip().lower()
+            host = str(s.get("host", "")).strip()
+            port = str(s.get("port", "")).strip()
+            url = str(s.get("url", "")).strip()
+            if not name:
+                return {"error": "All servers must have a name"}
+            if check_type in ("http", "https") and not url:
+                return {"error": f"URL is required for {name}"}
+            if check_type in ("ping", "ssh") and not host:
+                return {"error": f"Host is required for {name}"}
+            if check_type not in ("ping", "http", "https", "ssh"):
+                return {"error": f"Invalid type for {name}"}
+            entry = {"name": name, "type": check_type, "host": host}
+            if port:
+                entry["port"] = int(port)
+            if url:
+                entry["url"] = url
+            cleaned.append(entry)
+        self._save_servers(cleaned)
+        return {"success": True, "count": len(cleaned)}
 
     def _action_full_status(self) -> dict:
         """Return full status from the last monitoring cycle."""
@@ -372,6 +404,7 @@ class ServerMonitoringPlugin(PluginBase):
     var MON_ACT = '/api/plugins/server_monitoring/action';
     var monServers = __SERVERS_JSON__;
     var monEditMode = false;
+    var monEditServers = [];
 
     function _esc(s) {
         if (!s && s !== 0) return '';
@@ -445,9 +478,7 @@ class ServerMonitoringPlugin(PluginBase):
                 + '<input id="mon-eu-' + i + '" value="' + _esc(s.url || '') + '" placeholder="URL" style="width:100%">'
                 + '</span>'
                 + '</div>'
-                + '<div class="mon-c-end" style="text-align:right;white-space:nowrap">'
-                + '<button class="btn-sm" onclick="monSaveOne(' + i + ')" style="margin-right:4px;font-size:0.75rem;padding:2px 8px;background:#166534">Save</button>'
-                + '<button class="btn-sm" onclick="monTestOne(' + i + ')" style="margin-right:4px;font-size:0.75rem;padding:2px 8px">Test</button>'
+                + '<div class="mon-c-end" style="text-align:right">'
                 + '<button class="btn-sm" onclick="monDel(' + i + ')" style="font-size:0.75rem;padding:2px 8px;background:#7f1d1d">Del</button>'
                 + '</div></div>';
         });
@@ -469,7 +500,8 @@ class ServerMonitoringPlugin(PluginBase):
         var btns = document.getElementById('mon-header-btns');
         if (!btns) return;
         if (monEditMode) {
-            btns.innerHTML = '<button class="btn-sm" onclick="monExitEdit()">Cancel</button>';
+            btns.innerHTML = '<button class="btn-sm" onclick="monSaveAll()" style="margin-right:4px;background:#166534">Save</button>'
+                + '<button class="btn-sm" onclick="monExitEdit()">Cancel</button>';
         } else {
             btns.innerHTML = '<button class="btn-sm" onclick="monEnterEdit()" style="margin-right:4px">Edit</button>'
                 + '<button class="btn-sm" onclick="monTestAll()">Test All</button>';
@@ -478,14 +510,19 @@ class ServerMonitoringPlugin(PluginBase):
 
     window.monEnterEdit = function() {
         monEditMode = true;
-        monRender(monServers);
+        monEditServers = JSON.parse(JSON.stringify(monServers));
+        monRenderEdit(monEditServers);
         monUpdateHeaderBtns();
+        var addSec = document.getElementById('mon-add-section');
+        if (addSec) addSec.style.display = 'none';
     };
 
     window.monExitEdit = function() {
         monEditMode = false;
         monRefresh();
         monUpdateHeaderBtns();
+        var addSec = document.getElementById('mon-add-section');
+        if (addSec) addSec.style.display = '';
     };
 
     window.monEditType = function(index) {
@@ -560,33 +597,58 @@ class ServerMonitoringPlugin(PluginBase):
         }
     };
 
-    window.monDel = async function(index) {
-        if (!confirm('Delete this server?')) return;
+    window.monDel = function(index) {
+        monEditServers = monCaptureEdits();
+        monEditServers.splice(index, 1);
+        monRenderEdit(monEditServers);
+    };
+
+    function monCaptureEdits() {
+        var result = [];
+        for (var i = 0; i < monEditServers.length; i++) {
+            var typeEl = document.getElementById('mon-et-' + i);
+            var nameEl = document.getElementById('mon-en-' + i);
+            var hostEl = document.getElementById('mon-eh-' + i);
+            var portEl = document.getElementById('mon-ep-' + i);
+            var urlEl = document.getElementById('mon-eu-' + i);
+            if (!typeEl) continue;
+            var type = typeEl.value;
+            var s = {name: nameEl ? nameEl.value.trim() : '', type: type, host: hostEl ? hostEl.value.trim() : ''};
+            var port = portEl ? portEl.value.trim() : '';
+            if (port) s.port = parseInt(port);
+            var url = urlEl ? urlEl.value.trim() : '';
+            if (url) s.url = url;
+            if (type === 'http' && url && url.startsWith('https://')) s.type = 'https';
+            result.push(s);
+        }
+        return result;
+    }
+
+    window.monSaveAll = async function() {
+        var servers = monCaptureEdits();
+        for (var i = 0; i < servers.length; i++) {
+            if (!servers[i].name) { alert('All servers must have a name'); return; }
+        }
         try {
-            var r = await fetch(MON_ACT + '/servers/' + index + '/delete', {method: 'POST'});
+            var r = await fetch(MON_ACT + '/servers/save-all', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({servers: servers}),
+            });
             var d = await r.json();
             if (d.success) {
+                monEditMode = false;
                 monRefresh();
-                try { toast('Server removed', 'success'); } catch(_) {}
+                monUpdateHeaderBtns();
+                var addSec = document.getElementById('mon-add-section');
+                if (addSec) addSec.style.display = '';
+                try { toast('Servers saved!', 'success'); } catch(_) {}
             } else {
-                var msg = d.error || 'Failed to delete';
+                var msg = d.error || 'Save failed';
                 try { toast(msg, 'error'); } catch(_) { alert(msg); }
             }
         } catch(e) {
             try { toast('Error: ' + e, 'error'); } catch(_) { alert('Error: ' + e); }
-        }
-    };
-
-    window.monTestOne = async function(index) {
-        try {
-            var r = await fetch(MON_ACT + '/servers/' + index + '/test', {method: 'POST'});
-            var d = await r.json();
-            var name = monServers[index] ? monServers[index].name : 'Server';
-            var msg = name + ': ' + (d.online ? 'Online' : 'Offline');
-            if (d.response_time_ms != null) msg += ' (' + d.response_time_ms + 'ms)';
-            try { toast(msg, d.online ? 'success' : 'error'); } catch(_) { alert(msg); }
-        } catch(e) {
-            try { toast('Test failed: ' + e, 'error'); } catch(_) { alert('Test failed: ' + e); }
         }
     };
 
@@ -614,34 +676,6 @@ class ServerMonitoringPlugin(PluginBase):
 
     window.monTestAll = async function() {
         for (var i = 0; i < monServers.length; i++) window.monTest(i);
-    };
-
-    window.monSaveOne = async function(index) {
-        var type = document.getElementById('mon-et-' + index).value;
-        var name = document.getElementById('mon-en-' + index).value.trim();
-        var host = document.getElementById('mon-eh-' + index).value.trim();
-        var port = document.getElementById('mon-ep-' + index).value.trim();
-        var url = document.getElementById('mon-eu-' + index).value.trim();
-        if (!name) { alert('Name is required'); return; }
-        var body = {name: name, type: type, host: host, port: port, url: url};
-        if (type === 'http' && url.startsWith('https://')) body.type = 'https';
-        try {
-            var r = await fetch(MON_ACT + '/servers/' + index + '/update', {
-                method: 'POST',
-                headers: {'Content-Type': 'application/json'},
-                body: JSON.stringify(body),
-            });
-            var d = await r.json();
-            if (d.success) {
-                monRefresh();
-                try { toast('Server updated!', 'success'); } catch(_) {}
-            } else {
-                var msg = d.error || 'Update failed';
-                try { toast(msg, 'error'); } catch(_) { alert(msg); }
-            }
-        } catch(e) {
-            try { toast('Error: ' + e, 'error'); } catch(_) { alert('Error: ' + e); }
-        }
     };
 
     window.monSaveInterval = async function() {
@@ -680,7 +714,7 @@ class ServerMonitoringPlugin(PluginBase):
             <div id="mon-server-list">
                 {list_html}
             </div>
-            <div style="border-top:1px solid #334155;margin-top:16px;padding-top:16px">
+            <div id="mon-add-section" style="border-top:1px solid #334155;margin-top:16px;padding-top:16px">
                 <h4 style="margin:0 0 12px 0;font-size:0.9rem;color:#94a3b8">Add Server</h4>
                 <div class="mon-row" style="border-bottom:none;padding:0">
                     <div class="mon-c-type">
