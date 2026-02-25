@@ -335,7 +335,7 @@ class ServerMonitoringPlugin(PluginBase):
         servers = self._load_servers()
         servers_json = json.dumps(servers)
 
-        # Build server table HTML server-side so it renders without JS
+        # Build server list HTML server-side (flex divs, no table)
         if servers:
             rows = ""
             for i, s in enumerate(servers):
@@ -347,35 +347,31 @@ class ServerMonitoringPlugin(PluginBase):
                 )
                 target = html_mod.escape(target_raw)
                 rows += (
-                    f'<tr id="mon-row-{i}" style="border-bottom:1px solid #1e293b">'
-                    f'<td style="padding:6px 8px;color:#94a3b8;font-size:0.85rem">{type_label}</td>'
-                    f'<td style="padding:6px 8px;font-weight:500; max-width:200px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap">{name}</td>'
-                    f'<td style="padding:6px 8px;color:#94a3b8;font-size:0.85rem">{target}</td>'
-                    f'<td id="mon-st-{i}" style="padding:6px 8px;text-align:center;color:#64748b;font-size:0.85rem">-</td>'
-                    f'<td style="padding:4px 8px;text-align:right;white-space:nowrap">'
-                    f'<button class="btn-sm" onclick="monEdit({i})" style="margin-right:4px;font-size:0.75rem;padding:2px 8px">Edit</button>'
-                    f'<button class="btn-sm" onclick="monTest({i})" style="margin-right:4px;font-size:0.75rem;padding:2px 8px">Test</button>'
-                    f'<button class="btn-sm" onclick="monDel({i})" style="background:#7f1d1d;font-size:0.75rem;padding:2px 8px">Delete</button>'
-                    f"</td></tr>"
+                    f'<div class="mon-row" id="mon-row-{i}">'
+                    f'<div class="mon-c-type" style="color:#94a3b8;font-size:0.85rem">{type_label}</div>'
+                    f'<div class="mon-c-name" style="font-weight:500">{name}</div>'
+                    f'<div class="mon-c-target" style="color:#94a3b8;font-size:0.85rem">{target}</div>'
+                    f'<div class="mon-c-end" id="mon-st-{i}" style="text-align:center;color:#64748b;font-size:0.85rem">-</div>'
+                    f'</div>'
                 )
-            table_html = (
-                '<table style="width:100%;border-collapse:collapse">'
-                '<tr style="border-bottom:1px solid #334155;color:#94a3b8;font-size:0.75rem">'
-                '<th style="text-align:left;padding:4px 8px">Type</th>'
-                '<th style="text-align:left;padding:4px 8px; max-width:200px">Name</th>'
-                '<th style="text-align:left;padding:4px 8px">Target</th>'
-                '<th style="text-align:center;padding:4px 8px;width:80px">Status</th>'
-                '<th style="text-align:right;padding:4px 8px;width:160px"></th></tr>'
-                + rows + "</table>"
+            list_html = (
+                '<div class="mon-row mon-header">'
+                '<div class="mon-c-type">Type</div>'
+                '<div class="mon-c-name">Name</div>'
+                '<div class="mon-c-target">Target</div>'
+                '<div class="mon-c-end" style="text-align:center">Status</div>'
+                '</div>'
+                + rows
             )
         else:
-            table_html = '<p style="color:#64748b;margin:0">No servers configured yet. Add one below.</p>'
+            list_html = '<p style="color:#64748b;margin:0">No servers configured yet. Add one below.</p>'
 
         # JavaScript in a regular string to avoid f-string brace escaping
         js_code = """
 (function() {
     var MON_ACT = '/api/plugins/server_monitoring/action';
     var monServers = __SERVERS_JSON__;
+    var monEditMode = false;
 
     function _esc(s) {
         if (!s && s !== 0) return '';
@@ -386,34 +382,75 @@ class ServerMonitoringPlugin(PluginBase):
 
     function monRender(servers) {
         monServers = servers;
+        if (monEditMode) monRenderEdit(servers);
+        else monRenderNormal(servers);
+    }
+
+    function monRenderNormal(servers) {
         var el = document.getElementById('mon-server-list');
         if (!el) return;
         if (!servers.length) {
             el.innerHTML = '<p style="color:#64748b;margin:0">No servers configured yet. Add one below.</p>';
             return;
         }
-        var h = '<table style="width:100%;border-collapse:collapse">';
-        h += '<tr style="border-bottom:1px solid #334155;color:#94a3b8;font-size:0.75rem">'
-            + '<th style="text-align:left;padding:4px 8px">Type</th>'
-            + '<th style="text-align:left;padding:4px 8px">Name</th>'
-            + '<th style="text-align:left;padding:4px 8px">Target</th>'
-            + '<th style="text-align:center;padding:4px 8px;width:80px">Status</th>'
-            + '<th style="text-align:right;padding:4px 8px;width:160px"></th></tr>';
+        var h = '<div class="mon-row mon-header">'
+            + '<div class="mon-c-type">Type</div>'
+            + '<div class="mon-c-name">Name</div>'
+            + '<div class="mon-c-target">Target</div>'
+            + '<div class="mon-c-end" style="text-align:center">Status</div></div>';
         servers.forEach(function(s, i) {
             var tl = (s.type === 'http' || s.type === 'https') ? 'HTTP(S)' : s.type.toUpperCase();
             var tgt = s.url || (s.host + (s.port ? ':' + s.port : ''));
-            h += '<tr id="mon-row-' + i + '" style="border-bottom:1px solid #1e293b">'
-                + '<td style="padding:6px 8px;color:#94a3b8;font-size:0.85rem">' + tl + '</td>'
-                + '<td style="padding:6px 8px;font-weight:500">' + _esc(s.name) + '</td>'
-                + '<td style="padding:6px 8px;color:#94a3b8;font-size:0.85rem">' + _esc(tgt) + '</td>'
-                + '<td id="mon-st-' + i + '" style="padding:6px 8px;text-align:center;color:#64748b;font-size:0.85rem">-</td>'
-                + '<td style="padding:4px 8px;text-align:right;white-space:nowrap">'
-                + '<button class="btn-sm" onclick="monEdit(' + i + ')" style="margin-right:4px;font-size:0.75rem;padding:2px 8px">Edit</button>'
-                + '<button class="btn-sm" onclick="monTest(' + i + ')" style="margin-right:4px;font-size:0.75rem;padding:2px 8px">Test</button>'
-                + '<button class="btn-sm" onclick="monDel(' + i + ')" style="background:#7f1d1d;font-size:0.75rem;padding:2px 8px">Delete</button>'
-                + '</td></tr>';
+            h += '<div class="mon-row" id="mon-row-' + i + '">'
+                + '<div class="mon-c-type" style="color:#94a3b8;font-size:0.85rem">' + tl + '</div>'
+                + '<div class="mon-c-name" style="font-weight:500">' + _esc(s.name) + '</div>'
+                + '<div class="mon-c-target" style="color:#94a3b8;font-size:0.85rem">' + _esc(tgt) + '</div>'
+                + '<div class="mon-c-end" id="mon-st-' + i + '" style="text-align:center;color:#64748b;font-size:0.85rem">-</div>'
+                + '</div>';
         });
-        h += '</table>';
+        el.innerHTML = h;
+    }
+
+    function monRenderEdit(servers) {
+        var el = document.getElementById('mon-server-list');
+        if (!el) return;
+        if (!servers.length) {
+            el.innerHTML = '<p style="color:#64748b;margin:0">No servers configured.</p>';
+            return;
+        }
+        var h = '<div class="mon-row mon-header">'
+            + '<div class="mon-c-type">Type</div>'
+            + '<div class="mon-c-name">Name</div>'
+            + '<div class="mon-c-target">Target</div>'
+            + '<div class="mon-c-end"></div></div>';
+        servers.forEach(function(s, i) {
+            var isHttp = s.type === 'http' || s.type === 'https';
+            var isSsh = s.type === 'ssh';
+            h += '<div class="mon-row" id="mon-row-' + i + '">'
+                + '<div class="mon-c-type">'
+                + '<select id="mon-et-' + i + '" onchange="monEditType(' + i + ')" style="width:100%">'
+                + '<option value="ping"' + (s.type === 'ping' ? ' selected' : '') + '>Ping</option>'
+                + '<option value="http"' + (isHttp ? ' selected' : '') + '>HTTP(S)</option>'
+                + '<option value="ssh"' + (isSsh ? ' selected' : '') + '>SSH</option>'
+                + '</select></div>'
+                + '<div class="mon-c-name">'
+                + '<input id="mon-en-' + i + '" value="' + _esc(s.name) + '" placeholder="Name" style="width:100%">'
+                + '</div>'
+                + '<div class="mon-c-target">'
+                + '<span id="mon-ehw-' + i + '" style="' + (isHttp ? 'display:none' : 'display:flex;gap:4px') + '">'
+                + '<input id="mon-eh-' + i + '" value="' + _esc(s.host || '') + '" placeholder="Host / IP" style="flex:1">'
+                + '<input id="mon-ep-' + i + '" value="' + _esc(String(s.port || '')) + '" placeholder="22" style="width:60px' + (isSsh ? '' : ';display:none') + '">'
+                + '</span>'
+                + '<span id="mon-euw-' + i + '"' + (!isHttp ? ' style="display:none"' : '') + '>'
+                + '<input id="mon-eu-' + i + '" value="' + _esc(s.url || '') + '" placeholder="URL" style="width:100%">'
+                + '</span>'
+                + '</div>'
+                + '<div class="mon-c-end" style="text-align:right;white-space:nowrap">'
+                + '<button class="btn-sm" onclick="monSaveOne(' + i + ')" style="margin-right:4px;font-size:0.75rem;padding:2px 8px;background:#166534">Save</button>'
+                + '<button class="btn-sm" onclick="monTestOne(' + i + ')" style="margin-right:4px;font-size:0.75rem;padding:2px 8px">Test</button>'
+                + '<button class="btn-sm" onclick="monDel(' + i + ')" style="font-size:0.75rem;padding:2px 8px;background:#7f1d1d">Del</button>'
+                + '</div></div>';
+        });
         el.innerHTML = h;
     }
 
@@ -428,23 +465,64 @@ class ServerMonitoringPlugin(PluginBase):
         }
     }
 
+    function monUpdateHeaderBtns() {
+        var btns = document.getElementById('mon-header-btns');
+        if (!btns) return;
+        if (monEditMode) {
+            btns.innerHTML = '<button class="btn-sm" onclick="monExitEdit()">Cancel</button>';
+        } else {
+            btns.innerHTML = '<button class="btn-sm" onclick="monEnterEdit()" style="margin-right:4px">Edit</button>'
+                + '<button class="btn-sm" onclick="monTestAll()">Test All</button>';
+        }
+    }
+
+    window.monEnterEdit = function() {
+        monEditMode = true;
+        monRender(monServers);
+        monUpdateHeaderBtns();
+    };
+
+    window.monExitEdit = function() {
+        monEditMode = false;
+        monRefresh();
+        monUpdateHeaderBtns();
+    };
+
+    window.monEditType = function(index) {
+        var type = document.getElementById('mon-et-' + index).value;
+        var hw = document.getElementById('mon-ehw-' + index);
+        var uw = document.getElementById('mon-euw-' + index);
+        var ep = document.getElementById('mon-ep-' + index);
+        if (type === 'http') {
+            hw.style.display = 'none';
+            uw.style.display = '';
+        } else if (type === 'ssh') {
+            hw.style.display = 'flex';
+            uw.style.display = 'none';
+            ep.style.display = '';
+        } else {
+            hw.style.display = 'flex';
+            uw.style.display = 'none';
+            ep.style.display = 'none';
+        }
+    };
+
     window.monTypeChanged = function() {
         var type = document.getElementById('mon-type').value;
         var hostWrap = document.getElementById('mon-host-wrap');
-        var portWrap = document.getElementById('mon-port-wrap');
+        var portEl = document.getElementById('mon-port');
         var urlWrap = document.getElementById('mon-url-wrap');
         if (type === 'http') {
             hostWrap.style.display = 'none';
-            portWrap.style.display = 'none';
             urlWrap.style.display = '';
         } else if (type === 'ssh') {
-            hostWrap.style.display = '';
-            portWrap.style.display = '';
+            hostWrap.style.display = 'flex';
             urlWrap.style.display = 'none';
+            portEl.style.display = '';
         } else {
-            hostWrap.style.display = '';
-            portWrap.style.display = 'none';
+            hostWrap.style.display = 'flex';
             urlWrap.style.display = 'none';
+            portEl.style.display = 'none';
         }
     };
 
@@ -499,6 +577,19 @@ class ServerMonitoringPlugin(PluginBase):
         }
     };
 
+    window.monTestOne = async function(index) {
+        try {
+            var r = await fetch(MON_ACT + '/servers/' + index + '/test', {method: 'POST'});
+            var d = await r.json();
+            var name = monServers[index] ? monServers[index].name : 'Server';
+            var msg = name + ': ' + (d.online ? 'Online' : 'Offline');
+            if (d.response_time_ms != null) msg += ' (' + d.response_time_ms + 'ms)';
+            try { toast(msg, d.online ? 'success' : 'error'); } catch(_) { alert(msg); }
+        } catch(e) {
+            try { toast('Test failed: ' + e, 'error'); } catch(_) { alert('Test failed: ' + e); }
+        }
+    };
+
     window.monTest = async function(index) {
         var el = document.getElementById('mon-st-' + index);
         if (!el) return;
@@ -525,61 +616,7 @@ class ServerMonitoringPlugin(PluginBase):
         for (var i = 0; i < monServers.length; i++) window.monTest(i);
     };
 
-    window.monEdit = function(index) {
-        var s = monServers[index];
-        var row = document.getElementById('mon-row-' + index);
-        if (!row || !s) return;
-        var isHttp = s.type === 'http' || s.type === 'https';
-        var isSsh = s.type === 'ssh';
-        row.innerHTML = '<td style="padding:6px 8px">'
-            + '<select id="mon-et-' + index + '" onchange="monEditType(' + index + ')" style="width:100%">'
-            + '<option value="ping"' + (s.type === 'ping' ? ' selected' : '') + '>Ping</option>'
-            + '<option value="http"' + (isHttp ? ' selected' : '') + '>HTTP(S)</option>'
-            + '<option value="ssh"' + (isSsh ? ' selected' : '') + '>SSH</option>'
-            + '</select>'
-            + '</td>'
-            + '<td style="padding:6px 8px">'
-            + '<input id="mon-en-' + index + '" value="' + _esc(s.name) + '" placeholder="Name" style="width:100%">'
-            + '</td>'
-            + '<td style="padding:6px 8px">'
-            + '<span id="mon-ehw-' + index + '"' + (isHttp ? ' style="display:none"' : '') + '>'
-            + '<input id="mon-eh-' + index + '" value="' + _esc(s.host || '') + '" placeholder="Host / IP" style="width:' + (isSsh ? '70%' : '100%') + '">'
-            + '<input id="mon-ep-' + index + '" value="' + _esc(String(s.port || '')) + '" placeholder="22" style="width:25%;margin-left:5%' + (isSsh ? '' : ';display:none') + '">'
-            + '</span>'
-            + '<span id="mon-euw-' + index + '"' + (!isHttp ? ' style="display:none"' : '') + '>'
-            + '<input id="mon-eu-' + index + '" value="' + _esc(s.url || '') + '" placeholder="URL" style="width:100%">'
-            + '</span>'
-            + '</td>'
-            + '<td></td>'
-            + '<td style="padding:4px 8px;text-align:right;white-space:nowrap">'
-            + '<button class="btn-sm" onclick="monSaveEdit(' + index + ')" style="margin-right:4px;font-size:0.75rem;padding:2px 8px;background:#166534">Save</button>'
-            + '<button class="btn-sm" onclick="monCancelEdit()" style="font-size:0.75rem;padding:2px 8px">Cancel</button>'
-            + '</td>';
-    };
-
-    window.monEditType = function(index) {
-        var type = document.getElementById('mon-et-' + index).value;
-        var hw = document.getElementById('mon-ehw-' + index);
-        var uw = document.getElementById('mon-euw-' + index);
-        var ep = document.getElementById('mon-ep-' + index);
-        var eh = document.getElementById('mon-eh-' + index);
-        if (type === 'http') {
-            hw.style.display = 'none';
-            uw.style.display = '';
-        } else if (type === 'ssh') {
-            hw.style.display = '';
-            uw.style.display = 'none';
-            ep.style.display = '';
-            eh.style.width = '70%';
-        } else {
-            hw.style.display = '';
-            uw.style.display = 'none';
-            ep.style.display = 'none';
-            eh.style.width = '100%';
-        }
-    };
-
-    window.monSaveEdit = async function(index) {
+    window.monSaveOne = async function(index) {
         var type = document.getElementById('mon-et-' + index).value;
         var name = document.getElementById('mon-en-' + index).value.trim();
         var host = document.getElementById('mon-eh-' + index).value.trim();
@@ -607,10 +644,6 @@ class ServerMonitoringPlugin(PluginBase):
         }
     };
 
-    window.monCancelEdit = function() {
-        monRender(monServers);
-    };
-
     window.monSaveInterval = async function() {
         var val = document.getElementById('mon-interval').value;
         try {
@@ -628,42 +661,50 @@ class ServerMonitoringPlugin(PluginBase):
 """.replace("__SERVERS_JSON__", servers_json)
 
         return f"""
+        <style>
+        .mon-row {{ display: flex; align-items: center; padding: 8px 0; border-bottom: 1px solid #1e293b; }}
+        .mon-header {{ border-bottom-color: #334155; color: #94a3b8; font-size: 0.75rem; padding: 4px 0; }}
+        .mon-c-type {{ width: 80px; flex-shrink: 0; padding: 0 8px; }}
+        .mon-c-name {{ flex: 1; min-width: 80px; padding: 0 8px; }}
+        .mon-c-target {{ flex: 2; min-width: 100px; padding: 0 8px; }}
+        .mon-c-end {{ width: 170px; flex-shrink: 0; padding: 0 8px; }}
+        </style>
         <div class="card" style="margin-bottom:16px">
             <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">
                 <h3 style="margin:0">Servers</h3>
-                <button class="btn-sm" onclick="monTestAll()">Test All</button>
+                <div id="mon-header-btns">
+                    <button class="btn-sm" onclick="monEnterEdit()" style="margin-right:4px">Edit</button>
+                    <button class="btn-sm" onclick="monTestAll()">Test All</button>
+                </div>
             </div>
             <div id="mon-server-list">
-                {table_html}
+                {list_html}
             </div>
             <div style="border-top:1px solid #334155;margin-top:16px;padding-top:16px">
                 <h4 style="margin:0 0 12px 0;font-size:0.9rem;color:#94a3b8">Add Server</h4>
-                <div style="display:flex;gap:8px;align-items:end;flex-wrap:wrap">
-                    <div style="min-width:100px">
-                        <label style="font-size:0.75rem;color:#64748b;display:block;margin-bottom:2px">Type</label>
+                <div class="mon-row" style="border-bottom:none;padding:0">
+                    <div class="mon-c-type">
                         <select id="mon-type" onchange="monTypeChanged()" style="width:100%">
                             <option value="ping">Ping</option>
                             <option value="http">HTTP(S)</option>
                             <option value="ssh">SSH</option>
                         </select>
                     </div>
-                    <div style="flex:1;max-width:120px">
-                        <label style="font-size:0.75rem;color:#64748b;display:block;margin-bottom:2px">Name</label>
+                    <div class="mon-c-name">
                         <input id="mon-name" type="text" placeholder="Web Server" style="width:100%">
                     </div>
-                    <div id="mon-host-wrap" style="flex:1;min-width:120px">
-                        <label style="font-size:0.75rem;color:#64748b;display:block;margin-bottom:2px">Host / IP</label>
-                        <input id="mon-host" type="text" placeholder="192.168.1.1" style="width:100%">
+                    <div class="mon-c-target">
+                        <span id="mon-host-wrap" style="display:flex;gap:4px">
+                            <input id="mon-host" type="text" placeholder="192.168.1.1" style="flex:1">
+                            <input id="mon-port" type="text" placeholder="22" style="width:60px;display:none">
+                        </span>
+                        <span id="mon-url-wrap" style="display:none">
+                            <input id="mon-url" type="text" placeholder="https://example.com/health" style="width:100%">
+                        </span>
                     </div>
-                    <div id="mon-port-wrap" style="width:80px;display:none">
-                        <label style="font-size:0.75rem;color:#64748b;display:block;margin-bottom:2px">Port</label>
-                        <input id="mon-port" type="text" placeholder="22" style="width:100%">
+                    <div class="mon-c-end" style="text-align:right">
+                        <button class="btn-sm" onclick="monAdd()">Add</button>
                     </div>
-                    <div id="mon-url-wrap" style="flex:2;min-width:200px;display:none">
-                        <label style="font-size:0.75rem;color:#64748b;display:block;margin-bottom:2px">URL</label>
-                        <input id="mon-url" type="text" placeholder="https://example.com/health" style="width:100%">
-                    </div>
-                    <button class="btn-sm" onclick="monAdd()" style="white-space:nowrap;height:32px">Add</button>
                 </div>
             </div>
         </div>
